@@ -12,11 +12,10 @@ Use the Raspberry Pi OS (32-bit) Desktop Image
 
 Once booted SSH into the device and download the [installation script](https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh)
 
-`wget https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh`
-
-`chmod 755 rpi_prep.sh`
-
-
+```
+wget https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh
+chmod 755 rpi_prep.sh
+```
 
 
 
