@@ -1,3 +1,6 @@
+## Set Display Manager
+@lxpanel --profile LXDE-pi
+
 ## Stop displays from blanking
 @xset s noblank
 @xset s off
@@ -9,7 +12,6 @@
 #@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/2
 #@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/3
 #@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/4
-
 
 ## Track Display
 #@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/trackdisplay
