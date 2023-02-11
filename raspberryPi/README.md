@@ -7,8 +7,17 @@ Use the Raspberry Pi OS (32-bit) Desktop Image
     - Enable SSH
     - Set the password for the `pi` user
     - Set the SSID and password for the WiFi
-- Image and boot whilst connected to a monitor (important to allow the desktop to setup correctly)
+- Image
+- Boot whilst connected to a monitor (important to allow the desktop to setup correctly)
 
-Once booted SSH into the device and download the installation script
+Once booted SSH into the device and download the [installation script](https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh)
+
+`wget https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh`
+
+`chmod 755 rpi_prep.sh`
+
+
+
+
 
 
