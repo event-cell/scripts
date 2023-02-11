@@ -1,0 +1,15 @@
+## Stop displays from blanking
+@xset s noblank
+@xset s off
+@xset -dpms
+
+## Main timing screens
+#@xrandr --output HDMI-1 --rotate left
+#@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/1
+#@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/2
+#@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/3
+#@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/display/4
+
+
+## Track Display
+#@chromium-browser --start-fullscreen --hide-crash-restore-bubble http://timing.sdma/trackdisplay
