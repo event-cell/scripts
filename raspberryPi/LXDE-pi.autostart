@@ -1,6 +1,9 @@
 ## Set Display Manager
 @lxpanel --profile LXDE-pi
 
+## Hide cursor
+@unclutter -idle 30
+
 ## Stop displays from blanking
 @xset s noblank
 @xset s off

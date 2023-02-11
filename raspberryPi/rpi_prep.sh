@@ -11,14 +11,15 @@ fi
 ## root
 # Set Timezone
 sudo timedatectl set-timezone Australia/Sydney
+date
 
 # Set update repository and prepare base system
 REPO=mirror.aarnet.edu.au
 if ! grep -F -x -q $REPO  /etc/apt/sources.list; then
   sudo sed -i -e 's/raspbian.raspberrypi.org\/raspbian\//mirror.aarnet.edu.au\/pub\/raspbian\/raspbian\//g' /etc/apt/sources.list
-  sudo apt-get purge -y vlc geany thonny qpdfview dillo gpicview cups git
-  sudo apt-get autoremove -y
-  sudo apt-get autoclean -y
+  sudo apt purge -y vlc geany thonny qpdfview dillo gpicview cups git
+  sudo apt autoremove -y
+  sudo apt autoclean -y
   sudo apt update -y
   sudo apt upgrade -y
 fi
@@ -30,8 +31,11 @@ sudo systemctl start vncserver-x11-serviced.service
 # Install file space manager
 sudo apt install baobab -y
 
-# Install rsync
+# Install rsync as dependency for Log2ram
 sudo apt install rsync -y
+
+# Install Unclutter to hide mouse cursor
+sudo apt install unclutter
 
 # Setup SystemMaxUse for journald.conf
 if ! grep -F -x -q /etc/systemd/journald.conf "#SystemMaxUse="; then
