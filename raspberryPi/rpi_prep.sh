@@ -17,4 +17,6 @@ sudo systemctl start vncserver-x11-serviced.service
 cd ~ || exit
 cd .config || exit
 mkdir -p lxsession/LXDE-pi
-wget --ftp-user=anonymous ftp://192.168.11.15/pi/sdma/LXDE-pi.autostart --output-document=lxsession/LXDE-pi/autostart
+wget https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/LXDE-pi.autostart --output-document=lxsession/LXDE-pi/autostart
+
+
