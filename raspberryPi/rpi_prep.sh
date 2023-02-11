@@ -14,8 +14,7 @@ sudo systemctl enable vncserver-x11-serviced.service
 sudo systemctl start vncserver-x11-serviced.service
 
 # pi
-cd
-mkdir .config
-cd .config
+cd ~ || exit
+cd .config || exit
 mkdir -p lxsession/LXDE-pi
 wget --ftp-user=anonymous ftp://192.168.11.15/pi/sdma/LXDE-pi.autostart --output-document=lxsession/LXDE-pi/autostart
