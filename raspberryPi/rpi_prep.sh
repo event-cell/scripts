@@ -38,6 +38,7 @@ sudo apt install rsync -y
 sudo apt install unclutter
 
 # Setup SystemMaxUse for journald.conf
+sudo journalctl --vacuum-size=20M
 if ! grep -F -x -q /etc/systemd/journald.conf "#SystemMaxUse="; then
   sudo sed -i -e 's/#SystemMaxUse=/SystemMaxUse=32MB/g' /etc/systemd/journald.conf
 fi
