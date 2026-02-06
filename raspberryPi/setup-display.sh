@@ -118,8 +118,8 @@ ini_autostart_remove_key() {
   ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
-# ---------- Hostname -> screen number ----------
-detect_screen_number() {
+# ---------- Hostname ->  number ----------
+detect__number() {
   if [[ -n "${SCREEN_NUMBER}" ]]; then
     echo "${SCREEN_NUMBER}"
     return
@@ -128,7 +128,7 @@ detect_screen_number() {
   local hn
   hn="$(hostname 2>/dev/null || true)"
   # screen01, screen02, screen03, screen04
-  if [[ "$hn" =~ ^screen0([1-4])$ ]]; then
+  if [[ "$hn" =~ ^Screen0([1-4])$ ]]; then
     echo "${BASH_REMATCH[1]}"
     return
   fi
