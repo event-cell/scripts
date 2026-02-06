@@ -72,7 +72,7 @@ fi
 validate_screen_number "${SCREEN_NUMBER_ARG}"
 
 SCREEN_NUMBER="${SCREEN_NUMBER_ARG}"
-HOSTNAME_ARG
+
 HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
 
 # ---------- sanity checks ----------
