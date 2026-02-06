@@ -11,9 +11,12 @@ SCREEN_NUMBER="${SCREEN_NUMBER:-}"
 
 # rotate left 90
 KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
-KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME:-}"        # optional
+KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME:-}"             # optional
 KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}"  # 270 = left 90
 KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}"
+
+# NEW: output scale (2 = “2x DPI”)
+KIOSK_OUTPUT_SCALE="${KIOSK_OUTPUT_SCALE:-2}"
 
 TARGET_USER="${KIOSK_USER:-${SUDO_USER:-$(id -un)}}"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
@@ -80,10 +83,10 @@ CHROME_BIN="/usr/bin/chromium"
 [[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium-browser"
 PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
 
-# Added: --password-store=basic (prevents keyring prompts)
+# Includes: --password-store=basic (prevents keyring prompts)
 COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000 --password-store=basic"
 
-# Helper: rotate + keep DPMS on (labwc session)
+# Helper: rotate + scale + keep DPMS on (labwc session)
 ROTATE_HELPER="/usr/local/bin/labwc-kiosk-display.sh"
 sudo tee "$ROTATE_HELPER" >/dev/null <<'SH'
 #!/usr/bin/env bash
@@ -95,29 +98,23 @@ sleep 2
 ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
 OUT_NAME="${KIOSK_OUTPUT_NAME:-}"
 ROT="${KIOSK_OUTPUT_ROTATION:-270}"
+SCALE="${KIOSK_OUTPUT_SCALE:-2}"
 
 if [[ "$ROTATE_ENABLE" == "1" ]]; then
   if [[ -z "$OUT_NAME" ]]; then
-    # Prefer sysfs-derived connector names (matches wlroots most of the time)
-    # If this fails, user should set KIOSK_OUTPUT_NAME explicitly.
-    for st in /sys/class/drm/card*-*/status; do
-      [[ -f "$st" ]] || continue
-      if grep -q '^connected$' "$st"; then
-        bn="$(basename "$(dirname "$st")")"
-        echo "Detected DRM node: $bn" >&2
-      fi
-    done
     # Take first connected and strip card prefix:
     OUT_NAME="$(basename "$(dirname "$(grep -l '^connected$' /sys/class/drm/card*-*/status | head -n1)")")"
     OUT_NAME="${OUT_NAME#card*-}"
   fi
 
   case "$ROT" in 0|90|180|270) ;; *) ROT=270 ;; esac
+
+  # Apply transform + scale (scale=2 gives “2x DPI” effect)
   wlr-randr --output "$OUT_NAME" --transform "$ROT" >/dev/null 2>&1 || true
+  wlr-randr --output "$OUT_NAME" --scale "$SCALE"    >/dev/null 2>&1 || true
 fi
 
 # Keep DPMS on: if anything turns outputs off, force them back on
-# (Lightweight + robust for kiosks)
 while true; do
   wlopm --on '*' >/dev/null 2>&1 || true
   sleep 30
@@ -138,14 +135,12 @@ if [[ -f "$AUTOSTART" ]]; then
 fi
 
 # Write deterministic autostart:
-# - starts DPMS keepalive + rotation helper
-# - starts chromium kiosk
 tmp="$(mktemp)"
 cat >"$tmp" <<EOF
 # labwc autostart - generated
 
-# Rotate output + keep DPMS on
-env KIOSK_ROTATE_ENABLE=${KIOSK_ROTATE_ENABLE} KIOSK_OUTPUT_NAME=${KIOSK_OUTPUT_NAME} KIOSK_OUTPUT_ROTATION=${KIOSK_OUTPUT_ROTATION} ${ROTATE_HELPER} &
+# Rotate + scale + keep DPMS on
+env KIOSK_ROTATE_ENABLE=${KIOSK_ROTATE_ENABLE} KIOSK_OUTPUT_NAME=${KIOSK_OUTPUT_NAME} KIOSK_OUTPUT_ROTATION=${KIOSK_OUTPUT_ROTATION} KIOSK_OUTPUT_SCALE=${KIOSK_OUTPUT_SCALE} ${ROTATE_HELPER} &
 
 EOF
 
