@@ -260,7 +260,7 @@ log "Ensuring autostart directory exists..."
 mkdir -p "$AUTOSTART_DIR"
 
 log "Fetching autostart file..."
-wget -q https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/LXDE-pi.autostart \
+wget -q https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/LXDE-pi.autostart \
   --output-document="$AUTOSTART_FILE"
 ok "Autostart file updated: ${AUTOSTART_FILE}"
 
