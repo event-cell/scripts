@@ -1,39 +1,5 @@
 #!/usr/bin/env bash
 # configure_wayland_kiosk.sh
-#
-# Raspberry Pi OS (Bookworm) Wayland/Wayfire kiosk configurator:
-#   - Disables blanking / DPMS (Wayfire idle)
-#   - "Hides" cursor under Wayland by moving it off-screen periodically (ydotool)
-#   - Autostarts ONE Chromium kiosk window per device, URL selected by SCREEN_NUMBER (1..4)
-#   - Optionally rotates the primary connected output (auto-detected), or a specified output
-#
-# Designed to be called from another installation script. Idempotent.
-#
-# ----------------------
-# Environment variables:
-# ----------------------
-# KIOSK_ENABLE=1|0                 (default 1)
-# KIOSK_BASE_URL                   (default "http://timing.sdma")
-#
-# SCREEN_NUMBER=1..4               (recommended) selects /display/<n>
-#   If not set, hostname is used:
-#     screen01 -> 1, screen02 -> 2, screen03 -> 3, screen04 -> 4
-#
-# KIOSK_USER                        (default: invoking user, or SUDO_USER)
-#
-# Rotation options:
-# KIOSK_ROTATE_ENABLE=1|0           (default 0)
-# KIOSK_OUTPUT_NAME                 (optional; if empty and rotate enabled, auto-detect)
-# KIOSK_OUTPUT_ROTATION             (default 270) 0|90|180|270
-#
-# Output detection preferences:
-# KIOSK_OUTPUT_PREFER=HDMI          (default HDMI) one of: HDMI|DP|ANY
-#
-# Notes:
-#   - Wayland does NOT support xset/xrandr/unclutter.
-#   - Output auto-detect reads /sys/class/drm/*/status to find a connected connector and
-#     maps it to wlroots/Wayfire output names (e.g., HDMI-A-1, DP-1).
-#
 set -euo pipefail
 
 log() { printf "\n[%s] %s\n" "$(date +'%F %T')" "$*" >&2; }
@@ -73,4 +39,225 @@ ini_set() {
   mkdir -p "$(dirname "$file")"
   touch "$file"
 
-  if ! grep -qE "^\[$
+  # Add section if missing
+  if ! grep -qE "^\[$(printf '%s' "$section" | sed 's/[]\/$*.^|[]/\\&/g')\]\s*$" "$file"; then
+    {
+      echo ""
+      echo "[$section]"
+      echo "${key}=${value}"
+    } >>"$file"
+    return 0
+  fi
+
+  awk -v section="$section" -v key="$key" -v value="$value" '
+    function print_kv() { print key "=" value; }
+    BEGIN { in_section=0; key_done=0; }
+    {
+      if ($0 ~ /^\[/) {
+        if (in_section && !key_done) { print_kv(); key_done=1; }
+        in_section = ($0 == "[" section "]") ? 1 : 0;
+        print $0;
+        next;
+      }
+      if (in_section) {
+        if ($0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
+          if (!key_done) { print_kv(); key_done=1; }
+          next;
+        }
+      }
+      print $0;
+    }
+    END { if (in_section && !key_done) { print_kv(); } }
+  ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
+ini_autostart_remove_key() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v key="$key" '
+    BEGIN { in_autostart=0; }
+    {
+      if ($0 ~ /^\[autostart\][[:space:]]*$/) { in_autostart=1; print; next; }
+      if ($0 ~ /^\[/ && $0 !~ /^\[autostart\][[:space:]]*$/) { in_autostart=0; print; next; }
+      if (in_autostart && $0 ~ "^[[:space:]]*" key "[[:space:]]*=") { next; }
+      print;
+    }
+  ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
+# ---------- Hostname -> screen number ----------
+detect_screen_number() {
+  if [[ -n "${SCREEN_NUMBER}" ]]; then
+    echo "${SCREEN_NUMBER}"
+    return 0
+  fi
+
+  local hn hn_lc
+  hn="$(hostname 2>/dev/null || true)"
+  hn_lc="$(printf '%s' "$hn" | tr '[:upper:]' '[:lower:]')"
+
+  # screen01..screen04 (case-insensitive via hn_lc)
+  if [[ "$hn_lc" =~ ^screen0([1-4])$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  die "SCREEN_NUMBER not set and hostname '$hn' is not one of screen01..screen04"
+}
+
+# ---------- Output auto-detect ----------
+detect_output_name() {
+  local prefer="${KIOSK_OUTPUT_PREFER^^}"
+
+  mapfile -t connected < <(for st in /sys/class/drm/card*-*/status; do
+    [[ -f "$st" ]] || continue
+    if grep -q '^connected$' "$st"; then
+      echo "$(basename "$(dirname "$st")")"
+    fi
+  done)
+
+  [[ "${#connected[@]}" -gt 0 ]] || die "No connected displays detected in /sys/class/drm"
+
+  local c
+  local conn=()
+  for c in "${connected[@]}"; do
+    conn+=( "${c#card*-}" )
+  done
+
+  if [[ "$prefer" == "HDMI" ]]; then
+    for c in "${conn[@]}"; do [[ "$c" == HDMI-A-* ]] && { echo "$c"; return; }; done
+    for c in "${conn[@]}"; do [[ "$c" == HDMI-*   ]] && { echo "$c"; return; }; done
+    for c in "${conn[@]}"; do [[ "$c" == DP-*     ]] && { echo "$c"; return; }; done
+    echo "${conn[0]}"; return
+  fi
+
+  if [[ "$prefer" == "DP" ]]; then
+    for c in "${conn[@]}"; do [[ "$c" == DP-*     ]] && { echo "$c"; return; }; done
+    for c in "${conn[@]}"; do [[ "$c" == HDMI-A-* ]] && { echo "$c"; return; }; done
+    echo "${conn[0]}"; return
+  fi
+
+  echo "${conn[0]}"
+}
+
+# ---------- Main ----------
+log "Target user: ${TARGET_USER}"
+log "Target home: ${TARGET_HOME}"
+
+require_cmd awk
+require_cmd sed
+require_cmd getent
+
+SCREEN_NUMBER="$(detect_screen_number)"
+case "$SCREEN_NUMBER" in
+  1|2|3|4) ;;
+  *) die "SCREEN_NUMBER must be 1..4" ;;
+esac
+
+KIOSK_URL="${KIOSK_BASE_URL}/display/${SCREEN_NUMBER}"
+log "Screen number: ${SCREEN_NUMBER}"
+log "Kiosk URL: ${KIOSK_URL}"
+
+log "Installing required packages (ydotool + chromium)..."
+sudo apt-get update -y
+sudo apt-get install -y ydotool chromium-browser || sudo apt-get install -y ydotool chromium || true
+
+log "Creating/ensuring ydotoold systemd service..."
+sudo tee /etc/systemd/system/ydotoold.service >/dev/null <<'UNIT'
+[Unit]
+Description=ydotool daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ydotoold --socket-path=/tmp/ydotool_socket --socket-perm=0660
+Restart=always
+RestartSec=1
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now ydotoold.service
+
+log "Creating hide-cursor helper script..."
+HIDE_CURSOR_SCRIPT="/usr/local/bin/hide-cursor-wayland.sh"
+sudo tee "$HIDE_CURSOR_SCRIPT" >/dev/null <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+sleep 8
+
+SOCK="/tmp/ydotool_socket"
+export YDOTOOL_SOCKET="$SOCK"
+
+for i in {1..20}; do
+  [[ -S "$SOCK" ]] && break
+  sleep 0.2
+done
+
+while true; do
+  sudo -n /usr/bin/ydotool mousemove --delay 0 100000 100000 >/dev/null 2>&1 || true
+  sleep 30
+done
+SH
+sudo chmod 0755 "$HIDE_CURSOR_SCRIPT"
+
+log "Configuring Wayfire..."
+mkdir -p "$WAYFIRE_DIR"
+touch "$WAYFIRE_INI"
+backup_file "$WAYFIRE_INI"
+
+# Disable blanking / DPMS under Wayland
+ini_set "$WAYFIRE_INI" "idle" "dpms_timeout" "-1"
+
+# Start cursor hider
+ini_set "$WAYFIRE_INI" "autostart" "cursor" "$HIDE_CURSOR_SCRIPT"
+
+# Rotation
+if [[ "$KIOSK_ROTATE_ENABLE" == "1" ]]; then
+  case "$KIOSK_OUTPUT_ROTATION" in
+    0|90|180|270) ;;
+    *) die "KIOSK_OUTPUT_ROTATION must be one of 0,90,180,270" ;;
+  esac
+
+  if [[ -z "$KIOSK_OUTPUT_NAME" ]]; then
+    KIOSK_OUTPUT_NAME="$(detect_output_name)"
+    log "Auto-detected output: ${KIOSK_OUTPUT_NAME} (prefer=${KIOSK_OUTPUT_PREFER})"
+  else
+    log "Using specified output: ${KIOSK_OUTPUT_NAME}"
+  fi
+
+  ini_set "$WAYFIRE_INI" "output:${KIOSK_OUTPUT_NAME}" "transform" "$KIOSK_OUTPUT_ROTATION"
+  log "Rotation enabled: output:${KIOSK_OUTPUT_NAME} transform=${KIOSK_OUTPUT_ROTATION}"
+else
+  log "Rotation not enabled (set KIOSK_ROTATE_ENABLE=1)."
+fi
+
+# Kiosk autostart (ONE window)
+ini_autostart_remove_key "$WAYFIRE_INI" "kiosk"
+
+if [[ "$KIOSK_ENABLE" == "1" ]]; then
+  CHROME_BIN="/usr/bin/chromium-browser"
+  [[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium" || true
+  [[ -x "$CHROME_BIN" ]] || CHROME_BIN="chromium-browser"
+
+  COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000"
+  PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
+
+  CMD="${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL}"
+  ini_set "$WAYFIRE_INI" "autostart" "kiosk" "$CMD"
+  log "Configured autostart kiosk command."
+else
+  log "KIOSK_ENABLE=0; kiosk autostart removed."
+fi
+
+log "Fixing ownership of ${WAYFIRE_DIR} for ${TARGET_USER}..."
+sudo chown -R "${TARGET_USER}:${TARGET_USER}" "$WAYFIRE_DIR"
+
+log "Done."
+log "Wayfire config: ${WAYFIRE_INI}"
+log "Cursor script:  ${HIDE_CURSOR_SCRIPT}"
+log "URL:            ${KIOSK_URL}"
