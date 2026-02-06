@@ -223,7 +223,7 @@ ok "Downloaded: ${DISPLAY_SETUP_LOCAL}"
 log "Running display setup script (screen derived from hostname)..."
 sudo env \
   KIOSK_BASE_URL="http://timing.sdma" \
-  KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-0}" \
+  KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}" \
   KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}" \
   KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}" \
   "${DISPLAY_SETUP_LOCAL}"
