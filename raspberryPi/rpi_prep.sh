@@ -185,10 +185,33 @@ fi
 # ============================================================================
 section "Services and packages"
 
-log "Enabling and starting VNC server..."
-sudo systemctl enable vncserver-x11-serviced.service
-sudo systemctl restart vncserver-x11-serviced.service
-ok "VNC server enabled and started"
+# -----------------------------------------------------------------------------
+# VNC (Wayland/Bookworm): replace RealVNC X11 service with WayVNC
+# - RealVNC's vncserver-x11-serviced does not work on Wayland.
+# - Use wayvnc (the supported VNC server for Wayland sessions on Raspberry Pi OS).
+# -----------------------------------------------------------------------------
+
+# Remove the old RealVNC package if it was being installed (best-effort)
+sudo apt-get purge -y realvnc-vnc-server || true
+
+# Install WayVNC + a minimal RDP/VNC helper stack (Wayland)
+sudo apt-get update -y
+sudo apt-get install -y wayvnc
+
+# Disable the old X11 VNC service (best-effort) so it doesn't conflict / mislead
+sudo systemctl disable --now vncserver-x11-serviced.service 2>/dev/null || true
+sudo systemctl disable --now vncserver-x11.service 2>/dev/null || true
+sudo systemctl disable --now vncserver.service 2>/dev/null || true
+
+# Enable and start WayVNC (Wayland VNC server)
+sudo systemctl enable --now wayvnc.service
+
+# Quick sanity check
+sudo systemctl --no-pager --full status wayvnc.service || true
+
+# Optional: confirm it’s listening on TCP/5900
+# (will show LISTEN entries if active)
+sudo ss -ltnp | grep -E ':5900\b' || true
 
 log "Installing useful packages..."
 sudo apt-get install -y \
