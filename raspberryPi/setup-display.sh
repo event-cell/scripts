@@ -79,7 +79,9 @@ sudo apt-get install -y chromium wlr-randr wlopm || true
 CHROME_BIN="/usr/bin/chromium"
 [[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium-browser"
 PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
-COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000"
+
+# Added: --password-store=basic (prevents keyring prompts)
+COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000 --password-store=basic"
 
 # Helper: rotate + keep DPMS on (labwc session)
 ROTATE_HELPER="/usr/local/bin/labwc-kiosk-display.sh"
