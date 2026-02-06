@@ -113,46 +113,73 @@ touch "$HOME/.ssh/authorized_keys"
 chmod 600 "$HOME/.ssh/authorized_keys"
 ok "~/.ssh and authorized_keys ready"
 
-# ============================================================================
-# 2) Hostname (derived from screen number)
-# ============================================================================
-section "Hostname"
+# -----------------------------------------------------------------------------
+# Hostname: make it persist AND enforce on boot (prevents reversion to Screen99)
+# -----------------------------------------------------------------------------
 
-CUR_HOST="$(hostname)"
-
-# Derive hostname from screen number
 HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
 
-if [[ "$CUR_HOST" != "$HOSTNAME_ARG" ]]; then
-  log "Setting hostname: ${CUR_HOST} -> ${HOSTNAME_ARG}"
-
-  # 1) Set persistent hostname
-  sudo hostnamectl set-hostname "${HOSTNAME_ARG}"
-
-  # 2) Force-write /etc/hostname (belt + braces)
-  echo "${HOSTNAME_ARG}" | sudo tee /etc/hostname >/dev/null
-
-  # 3) Ensure /etc/hosts has a correct 127.0.1.1 mapping (this stops sudo warnings)
-  if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
-    sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
-  else
-    echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
-  fi
-
-  # 4) Optional: keep the old hostname resolvable for this run (prevents weirdness mid-script)
-  # (comment out if you don't want it)
-  if ! sudo grep -qE "^\s*127\.0\.1\.1\s+${CUR_HOST}(\s|$)" /etc/hosts; then
-    echo -e "127.0.1.1\t${CUR_HOST}" | sudo tee -a /etc/hosts >/dev/null || true
-  fi
-
-  # 5) Update /etc/hosts 127.0.1.1 line already done; now set runtime hostname too (best effort)
-  sudo hostname "${HOSTNAME_ARG}" || true
-  sudo systemctl restart systemd-hostnamed.service || true
-
-  ok "Hostname set to ${HOSTNAME_ARG}"
+# 1) Update /etc/hosts FIRST so sudo won't complain after hostname changes
+#    Ensure there is a 127.0.1.1 line; if present, replace it.
+if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
+  sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
 else
-  ok "Hostname already ${HOSTNAME_ARG}"
+  echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
 fi
+
+# 2) Persist hostname (belt + braces)
+echo "${HOSTNAME_ARG}" | sudo tee /etc/hostname >/dev/null
+sudo hostnamectl set-hostname "${HOSTNAME_ARG}"
+sudo hostname "${HOSTNAME_ARG}" || true
+sudo systemctl restart systemd-hostnamed.service || true
+
+# 3) Store screen number for boot-time enforcement
+echo "${SCREEN_NUMBER}" | sudo tee /etc/sdma-screen-number >/dev/null
+sudo chmod 0644 /etc/sdma-screen-number
+
+# 4) Install boot-time hostname enforcer
+sudo tee /usr/local/sbin/sdma-set-hostname.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+N="$(cat /etc/sdma-screen-number 2>/dev/null || true)"
+if [[ ! "$N" =~ ^[1-4]$ ]]; then
+  exit 0
+fi
+
+HN="$(printf 'screen%02d' "$N")"
+
+# Ensure /etc/hosts matches (prevents sudo warning)
+if grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
+  sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HN}|g" /etc/hosts
+else
+  echo -e "127.0.1.1\t${HN}" >> /etc/hosts
+fi
+
+echo "${HN}" > /etc/hostname
+hostnamectl set-hostname "${HN}" || true
+hostname "${HN}" || true
+EOF
+sudo chmod 0755 /usr/local/sbin/sdma-set-hostname.sh
+
+sudo tee /etc/systemd/system/sdma-set-hostname.service >/dev/null <<'EOF'
+[Unit]
+Description=Enforce SDMA kiosk hostname from /etc/sdma-screen-number
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sdma-set-hostname.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable sdma-set-hostname.service
+
 
 
 # ============================================================================
