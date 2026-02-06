@@ -1,5 +1,35 @@
 #!/usr/bin/env bash
 # configure_wayland_kiosk.sh
+#
+# Raspberry Pi OS (Bookworm) Wayland/Wayfire kiosk configurator:
+#   - Disables blanking / DPMS (Wayfire idle)
+#   - "Hides" cursor under Wayland by moving it off-screen periodically (ydotool)
+#   - Autostarts ONE Chromium kiosk window per device, URL selected by SCREEN_NUMBER (1..4)
+#   - Optionally rotates the primary connected output (auto-detected), or a specified output
+#
+# Designed to be called from another installation script. Idempotent.
+#
+# ----------------------
+# Environment variables:
+# ----------------------
+# KIOSK_ENABLE=1|0                 (default 1)
+# KIOSK_BASE_URL                   (default "http://timing.sdma")
+#
+# SCREEN_NUMBER=1..4               (recommended) selects /display/<n>
+#   If not set, hostname is used:
+#     screen01 -> 1, screen02 -> 2, screen03 -> 3, screen04 -> 4
+#   NOTE: RPi may capitalise first letter (Screen01). We handle this.
+#
+# KIOSK_USER                        (default: invoking user, or SUDO_USER)
+#
+# Rotation options:
+# KIOSK_ROTATE_ENABLE=1|0           (default 0)
+# KIOSK_OUTPUT_NAME                 (optional; if empty and rotate enabled, auto-detect)
+# KIOSK_OUTPUT_ROTATION             (default 270) 0|90|180|270
+#
+# Output detection preferences:
+# KIOSK_OUTPUT_PREFER=HDMI          (default HDMI) one of: HDMI|DP|ANY
+#
 set -euo pipefail
 
 log() { printf "\n[%s] %s\n" "$(date +'%F %T')" "$*" >&2; }
@@ -85,7 +115,49 @@ ini_autostart_remove_key() {
   ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
-# ---------- Hostname -> screen number ----------
+# Ensure Wayfire plugins needed for our settings are enabled
+# (Without 'idle' and 'autostart', dpms_timeout + autostart keys may do nothing.)
+ensure_wayfire_plugins() {
+  local file="$1"
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+
+  # Ensure [core] exists
+  if ! grep -qE '^\[core\]\s*$' "$file"; then
+    {
+      echo ""
+      echo "[core]"
+      echo "plugins = autostart idle"
+    } >>"$file"
+    return 0
+  fi
+
+  # Get current plugins line (if any)
+  local plugins
+  plugins="$(awk '
+    BEGIN{in=0}
+    /^\[core\]/{in=1; next}
+    /^\[/{in=0}
+    in && $0 ~ /^[[:space:]]*plugins[[:space:]]*=/ {
+      sub(/^[^=]*=/,""); print; exit
+    }
+  ' "$file" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+
+  if [[ -z "$plugins" ]]; then
+    ini_set "$file" "core" "plugins" "autostart idle"
+    return 0
+  fi
+
+  for p in autostart idle; do
+    if ! echo " $plugins " | grep -q " $p "; then
+      plugins="$plugins $p"
+    fi
+  done
+  plugins="$(echo "$plugins" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+  ini_set "$file" "core" "plugins" "$plugins"
+}
+
+# ---------- Hostname -> number (case-insensitive) ----------
 detect_screen_number() {
   if [[ -n "${SCREEN_NUMBER}" ]]; then
     echo "${SCREEN_NUMBER}"
@@ -96,7 +168,7 @@ detect_screen_number() {
   hn="$(hostname 2>/dev/null || true)"
   hn_lc="$(printf '%s' "$hn" | tr '[:upper:]' '[:lower:]')"
 
-  # screen01..screen04 (case-insensitive via hn_lc)
+  # screen01..screen04 (handles Screen01 etc.)
   if [[ "$hn_lc" =~ ^screen0([1-4])$ ]]; then
     echo "${BASH_REMATCH[1]}"
     return 0
@@ -170,7 +242,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ydotoold --socket-path=/tmp/ydotool_socket --socket-perm=0660
+ExecStart=/usr/bin/ydotoold --socket-path=/tmp/ydotool_socket --socket-perm=0666
 Restart=always
 RestartSec=1
 User=root
@@ -193,13 +265,13 @@ sleep 8
 SOCK="/tmp/ydotool_socket"
 export YDOTOOL_SOCKET="$SOCK"
 
-for i in {1..20}; do
+for i in {1..30}; do
   [[ -S "$SOCK" ]] && break
   sleep 0.2
 done
 
 while true; do
-  sudo -n /usr/bin/ydotool mousemove --delay 0 100000 100000 >/dev/null 2>&1 || true
+  /usr/bin/ydotool mousemove --delay 0 100000 100000 >/dev/null 2>&1 || true
   sleep 30
 done
 SH
@@ -210,10 +282,13 @@ mkdir -p "$WAYFIRE_DIR"
 touch "$WAYFIRE_INI"
 backup_file "$WAYFIRE_INI"
 
-# Disable blanking / DPMS under Wayland
+# Ensure needed plugins are enabled
+ensure_wayfire_plugins "$WAYFIRE_INI"
+
+# Disable blanking / DPMS under Wayland (requires idle plugin)
 ini_set "$WAYFIRE_INI" "idle" "dpms_timeout" "-1"
 
-# Start cursor hider
+# Start cursor hider (requires autostart plugin)
 ini_set "$WAYFIRE_INI" "autostart" "cursor" "$HIDE_CURSOR_SCRIPT"
 
 # Rotation
