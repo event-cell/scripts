@@ -3,15 +3,17 @@ set -euo pipefail
 
 # ============================================================================
 # Raspberry Pi "golden image" prep script
-# - Mandatory argument: hostname
+# - Mandatory argument: screen number (single digit 1..4)
+# - Sets hostname to screen01..screen04
 # - Friendly status output
 # - Installs a one-shot "uniquify" service for post-clone identity fixes
-#   (machine-id + SSH host keys) while keeping hostname from argument.
+#   (machine-id + SSH host keys)
 #
 # Usage:
-#   ./prep.sh <hostname>
+#   ./prep.sh <screen_number>
 # Example:
-#   ./prep.sh sdma-kiosk-01
+#   ./prep.sh 1   -> hostname screen01
+#   ./prep.sh 4   -> hostname screen04
 # ============================================================================
 
 # ---------- pretty logging ----------
@@ -38,35 +40,40 @@ need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Missing command: $1"; exi
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <hostname>
+Usage: $(basename "$0") <screen_number>
 
-<hostname> is mandatory and should be a valid Linux hostname:
-- lowercase letters, digits, hyphen
-- 1..63 chars per label, must start/end with alnum
+<screen_number> is mandatory and must be a single digit 1..4.
+It will be expanded to hostname screen01..screen04.
+
 Examples:
-  $(basename "$0") pi-display-01
-  $(basename "$0") sdma-kiosk-01
+  $(basename "$0") 1   # -> screen01
+  $(basename "$0") 2   # -> screen02
+  $(basename "$0") 3   # -> screen03
+  $(basename "$0") 4   # -> screen04
 EOF
 }
 
-validate_hostname() {
-  local h="$1"
-  # Basic RFC-ish hostname label validation (single-label)
-  if [[ ! "$h" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
-    err "Invalid hostname: '$h'"
+validate_screen_number() {
+  local n="$1"
+  if [[ ! "$n" =~ ^[1-4]$ ]]; then
+    err "Invalid screen number: '$n' (must be 1..4)"
     usage
     exit 2
   fi
 }
 
 # ---------- mandatory arg ----------
-HOSTNAME_ARG="${1:-}"
-if [[ -z "${HOSTNAME_ARG}" ]]; then
-  err "Hostname argument is required."
+SCREEN_NUMBER_ARG="${1:-}"
+if [[ -z "${SCREEN_NUMBER_ARG}" ]]; then
+  err "Screen number argument is required."
   usage
   exit 2
 fi
-validate_hostname "${HOSTNAME_ARG}"
+validate_screen_number "${SCREEN_NUMBER_ARG}"
+
+SCREEN_NUMBER="${SCREEN_NUMBER_ARG}"
+HOSTNAME_ARG
+HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
 
 # ---------- sanity checks ----------
 need_cmd sudo
@@ -74,6 +81,7 @@ need_cmd grep
 need_cmd sed
 need_cmd systemctl
 need_cmd timedatectl
+need_cmd wget
 
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
   warn "You're running as root. This script is intended to be run as user 'pi' (it uses sudo). Continuing anyway."
@@ -84,10 +92,14 @@ REPO_HOST="mirror.aarnet.edu.au"
 REPO_PATH="mirror.aarnet.edu.au/pub/raspbian/raspbian/"
 DEFAULT_TZ="Australia/Sydney"
 
-# Uniquify components (keeps hostname as provided)
+# Uniquify components
 UNIQ_SCRIPT="/usr/local/sbin/pi-uniquify-once.sh"
 UNIQ_SERVICE="/etc/systemd/system/pi-uniquify-once.service"
 HOSTNAME_MARKER="/etc/pi-hostname-set.done"
+
+# Display/kiosk setup (Wayland)
+DISPLAY_SETUP_URL="https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/setup-display.sh"
+DISPLAY_SETUP_LOCAL="/usr/local/sbin/setup-display.sh"
 
 # ============================================================================
 # 1) User setup (pi)
@@ -102,7 +114,7 @@ chmod 600 "$HOME/.ssh/authorized_keys"
 ok "~/.ssh and authorized_keys ready"
 
 # ============================================================================
-# 2) Hostname (mandatory argument)
+# 2) Hostname (derived from screen number)
 # ============================================================================
 section "Hostname"
 
@@ -124,6 +136,8 @@ if [[ "$CUR_HOST" != "$HOSTNAME_ARG" ]]; then
 else
   ok "Hostname already ${HOSTNAME_ARG}"
 fi
+
+ok "SCREEN_NUMBER=${SCREEN_NUMBER} (from argument)"
 
 # ============================================================================
 # 3) Base OS config (root tasks)
@@ -180,7 +194,6 @@ log "Installing useful packages..."
 sudo apt-get install -y \
   baobab \
   rsync \
-  unclutter \
   wget \
   ca-certificates \
   tar
@@ -234,7 +247,6 @@ else
   )
   ok "log2ram installed"
 
-  # Sanity checks + start
   if [[ ! -f /etc/log2ram.conf ]]; then
     warn "/etc/log2ram.conf missing after install; attempting to recover from repo default..."
     sudo cp -a "${TMPDIR}/log2ram-master/log2ram.conf" /etc/log2ram.conf || true
@@ -248,28 +260,38 @@ else
   ok "Cleaned up temp files"
 fi
 
-
 # ============================================================================
-# 8) Desktop autostart (pi)
+# 8) Display / kiosk setup (Wayland)
 # ============================================================================
-section "Desktop autostart (LXDE-pi)"
+section "Display / kiosk setup (Wayland)"
 
-AUTOSTART_DIR="$HOME/.config/lxsession/LXDE-pi"
-AUTOSTART_FILE="${AUTOSTART_DIR}/autostart"
-log "Ensuring autostart directory exists..."
-mkdir -p "$AUTOSTART_DIR"
+log "Removing old LXDE autostart (best-effort)..."
+AUTOSTART_FILE="$HOME/.config/lxsession/LXDE-pi/autostart"
+if [[ -f "$AUTOSTART_FILE" ]]; then
+  rm -f "$AUTOSTART_FILE" || true
+  ok "Removed old LXDE autostart file: ${AUTOSTART_FILE}"
+else
+  ok "No old LXDE autostart file found"
+fi
 
-log "Fetching autostart file..."
-wget -4 -q https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/LXDE-pi.autostart \
-  --output-document="$AUTOSTART_FILE"
-ok "Autostart file updated: ${AUTOSTART_FILE}"
+log "Downloading display setup script..."
+sudo mkdir -p "$(dirname "$DISPLAY_SETUP_LOCAL")"
+sudo wget -4 -q "$DISPLAY_SETUP_URL" -O "$DISPLAY_SETUP_LOCAL"
+sudo chmod 0755 "$DISPLAY_SETUP_LOCAL"
+ok "Downloaded: ${DISPLAY_SETUP_LOCAL}"
+
+log "Running display setup script with SCREEN_NUMBER=${SCREEN_NUMBER}..."
+sudo env \
+  SCREEN_NUMBER="${SCREEN_NUMBER}" \
+  KIOSK_BASE_URL="http://timing.sdma" \
+  KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-0}" \
+  KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}" \
+  KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}" \
+  "${DISPLAY_SETUP_LOCAL}"
+ok "Display setup complete"
 
 # ============================================================================
 # 9) Make-clone-unique (recommended for imaging/cloning)
-#    One-shot service that runs ONCE on first boot after cloning:
-#      - machine-id => regenerated
-#      - SSH host keys => regenerated
-#    Hostname is NOT changed here (it comes from the mandatory argument).
 # ============================================================================
 section "Clone uniqueness (first-boot one-shot)"
 
@@ -283,24 +305,20 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== $(date -Is) pi-uniquify-once starting ==="
 
-# 1) Regenerate machine-id (system identity)
 echo "Resetting machine-id..."
 rm -f /etc/machine-id /var/lib/dbus/machine-id || true
 systemd-machine-id-setup
 
-# 2) Regenerate SSH host keys (avoids clones sharing host identity)
 echo "Regenerating SSH host keys..."
 rm -f /etc/ssh/ssh_host_* || true
 ssh-keygen -A
 
-# Restart SSH so new keys are active immediately (best-effort)
 if systemctl is-active --quiet ssh; then
   systemctl restart ssh || true
 elif systemctl is-active --quiet sshd; then
   systemctl restart sshd || true
 fi
 
-# 3) Mark complete (so it won't run again)
 echo "Uniquify complete; creating marker file."
 touch /var/lib/pi-uniquify-once.done
 
@@ -337,8 +355,10 @@ ok "First-boot uniquify service enabled (will run once)"
 section "Complete"
 
 ok "Prep completed successfully."
-log "Hostname now set to: ${HOSTNAME_ARG}"
+log "Screen number: ${SCREEN_NUMBER}"
+log "Hostname set to: ${HOSTNAME_ARG}"
 log "On first boot after cloning, the device will:"
 log "  - regenerate /etc/machine-id"
 log "  - regenerate SSH host keys"
 log "Logs: /var/log/pi-uniquify-once.log"
+warn "A reboot is required for the new hostname to be active system-wide."
