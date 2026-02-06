@@ -119,25 +119,41 @@ ok "~/.ssh and authorized_keys ready"
 section "Hostname"
 
 CUR_HOST="$(hostname)"
+
+# Derive hostname from screen number
+HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
+
 if [[ "$CUR_HOST" != "$HOSTNAME_ARG" ]]; then
   log "Setting hostname: ${CUR_HOST} -> ${HOSTNAME_ARG}"
+
+  # 1) Set persistent hostname
   sudo hostnamectl set-hostname "${HOSTNAME_ARG}"
 
-  # Update /etc/hosts for 127.0.1.1 mapping
+  # 2) Force-write /etc/hostname (belt + braces)
+  echo "${HOSTNAME_ARG}" | sudo tee /etc/hostname >/dev/null
+
+  # 3) Ensure /etc/hosts has a correct 127.0.1.1 mapping (this stops sudo warnings)
   if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
     sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
   else
     echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
   fi
 
-  echo "${HOSTNAME_ARG}" | sudo tee /etc/pi-hostname-set >/dev/null
-  sudo touch "${HOSTNAME_MARKER}"
+  # 4) Optional: keep the old hostname resolvable for this run (prevents weirdness mid-script)
+  # (comment out if you don't want it)
+  if ! sudo grep -qE "^\s*127\.0\.1\.1\s+${CUR_HOST}(\s|$)" /etc/hosts; then
+    echo -e "127.0.1.1\t${CUR_HOST}" | sudo tee -a /etc/hosts >/dev/null || true
+  fi
+
+  # 5) Update /etc/hosts 127.0.1.1 line already done; now set runtime hostname too (best effort)
+  sudo hostname "${HOSTNAME_ARG}" || true
+  sudo systemctl restart systemd-hostnamed.service || true
+
   ok "Hostname set to ${HOSTNAME_ARG}"
 else
   ok "Hostname already ${HOSTNAME_ARG}"
 fi
 
-ok "SCREEN_NUMBER=${SCREEN_NUMBER} (from argument)"
 
 # ============================================================================
 # 3) Base OS config (root tasks)
