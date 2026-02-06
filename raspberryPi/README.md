@@ -22,8 +22,3 @@ Run this on the Raspberry Pi (as user `pi`) and provide a **mandatory hostname**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/rpi_prep.sh | bash -s -- <hostname>
-
-
-
-
-
