@@ -117,68 +117,61 @@ ok "~/.ssh and authorized_keys ready"
 # Hostname: make it persist AND enforce on boot (prevents reversion to Screen99)
 # -----------------------------------------------------------------------------
 
+# ============================================================================
+# 2) Hostname (derived from screen number argument)
+# ============================================================================
+section "Hostname"
+
+SCREEN_NUMBER_ARG="${1:-}"
+if [[ -z "${SCREEN_NUMBER_ARG}" ]]; then
+  err "Screen number argument is required."
+  usage
+  exit 2
+fi
+if [[ ! "${SCREEN_NUMBER_ARG}" =~ ^[1-4]$ ]]; then
+  err "Invalid screen number: '${SCREEN_NUMBER_ARG}' (must be 1..4)"
+  usage
+  exit 2
+fi
+
+SCREEN_NUMBER="${SCREEN_NUMBER_ARG}"
 HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
 
+CUR_HOST="$(hostname)"
+
 # 1) Update /etc/hosts FIRST so sudo won't complain after hostname changes
-#    Ensure there is a 127.0.1.1 line; if present, replace it.
 if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
   sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
 else
   echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
 fi
 
-# 2) Persist hostname (belt + braces)
+# 2) Persist hostname in canonical places
 echo "${HOSTNAME_ARG}" | sudo tee /etc/hostname >/dev/null
-sudo hostnamectl set-hostname "${HOSTNAME_ARG}"
+sudo hostnamectl set-hostname "${HOSTNAME_ARG}" || true
 sudo hostname "${HOSTNAME_ARG}" || true
 sudo systemctl restart systemd-hostnamed.service || true
 
-# 3) Store screen number for boot-time enforcement
-echo "${SCREEN_NUMBER}" | sudo tee /etc/sdma-screen-number >/dev/null
-sudo chmod 0644 /etc/sdma-screen-number
-
-# 4) Install boot-time hostname enforcer
-sudo tee /usr/local/sbin/sdma-set-hostname.sh >/dev/null <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-N="$(cat /etc/sdma-screen-number 2>/dev/null || true)"
-if [[ ! "$N" =~ ^[1-4]$ ]]; then
-  exit 0
+# 3) Prevent DHCP/NetworkManager from changing hostname (best-effort)
+# NetworkManager: set hostname mode to "none" (don’t override system hostname)
+if [[ -f /etc/NetworkManager/NetworkManager.conf ]]; then
+  sudo mkdir -p /etc/NetworkManager/conf.d
+  sudo tee /etc/NetworkManager/conf.d/99-hostname.conf >/dev/null <<'EOF'
+[main]
+hostname-mode=none
+EOF
+  sudo systemctl restart NetworkManager 2>/dev/null || true
 fi
 
-HN="$(printf 'screen%02d' "$N")"
-
-# Ensure /etc/hosts matches (prevents sudo warning)
-if grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
-  sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HN}|g" /etc/hosts
-else
-  echo -e "127.0.1.1\t${HN}" >> /etc/hosts
+# dhcpcd (if used): remove any explicit hostname directive
+if [[ -f /etc/dhcpcd.conf ]]; then
+  sudo sed -i -E '/^\s*hostname(\s+|=).*/d' /etc/dhcpcd.conf
+  sudo systemctl restart dhcpcd 2>/dev/null || true
 fi
 
-echo "${HN}" > /etc/hostname
-hostnamectl set-hostname "${HN}" || true
-hostname "${HN}" || true
-EOF
-sudo chmod 0755 /usr/local/sbin/sdma-set-hostname.sh
+ok "Hostname configured: ${CUR_HOST} -> ${HOSTNAME_ARG}"
+ok "SCREEN_NUMBER=${SCREEN_NUMBER} (from argument)"
 
-sudo tee /etc/systemd/system/sdma-set-hostname.service >/dev/null <<'EOF'
-[Unit]
-Description=Enforce SDMA kiosk hostname from /etc/sdma-screen-number
-DefaultDependencies=no
-Before=network-pre.target
-Wants=network-pre.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/sdma-set-hostname.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable sdma-set-hostname.service
 
 
 
