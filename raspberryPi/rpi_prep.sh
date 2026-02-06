@@ -120,60 +120,28 @@ ok "~/.ssh and authorized_keys ready"
 # ============================================================================
 # 2) Hostname (derived from screen number argument)
 # ============================================================================
-section "Hostname"
-
-SCREEN_NUMBER_ARG="${1:-}"
-if [[ -z "${SCREEN_NUMBER_ARG}" ]]; then
-  err "Screen number argument is required."
-  usage
-  exit 2
-fi
-if [[ ! "${SCREEN_NUMBER_ARG}" =~ ^[1-4]$ ]]; then
-  err "Invalid screen number: '${SCREEN_NUMBER_ARG}' (must be 1..4)"
-  usage
+# Hostname: minimal + safe (no NetworkManager changes)
+SCREEN_NUMBER="${1:-}"
+if [[ ! "$SCREEN_NUMBER" =~ ^[1-4]$ ]]; then
+  echo "Usage: $0 <screen_number 1..4>" >&2
   exit 2
 fi
 
-SCREEN_NUMBER="${SCREEN_NUMBER_ARG}"
-HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
+HOSTNAME_ARG="$(printf 'screen%02d' "$SCREEN_NUMBER")"
 
-CUR_HOST="$(hostname)"
+# /etc/hostname
+echo "$HOSTNAME_ARG" | sudo tee /etc/hostname >/dev/null
 
-# 1) Update /etc/hosts FIRST so sudo won't complain after hostname changes
+# /etc/hosts (prevents sudo resolve warnings)
 if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
   sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
 else
   echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
 fi
 
-# 2) Persist hostname in canonical places
-echo "${HOSTNAME_ARG}" | sudo tee /etc/hostname >/dev/null
-sudo hostnamectl set-hostname "${HOSTNAME_ARG}" || true
-sudo hostname "${HOSTNAME_ARG}" || true
-sudo systemctl restart systemd-hostnamed.service || true
-
-# 3) Prevent DHCP/NetworkManager from changing hostname (best-effort)
-# NetworkManager: set hostname mode to "none" (don’t override system hostname)
-if [[ -f /etc/NetworkManager/NetworkManager.conf ]]; then
-  sudo mkdir -p /etc/NetworkManager/conf.d
-  sudo tee /etc/NetworkManager/conf.d/99-hostname.conf >/dev/null <<'EOF'
-[main]
-hostname-mode=none
-EOF
-  sudo systemctl restart NetworkManager 2>/dev/null || true
-fi
-
-# dhcpcd (if used): remove any explicit hostname directive
-if [[ -f /etc/dhcpcd.conf ]]; then
-  sudo sed -i -E '/^\s*hostname(\s+|=).*/d' /etc/dhcpcd.conf
-  sudo systemctl restart dhcpcd 2>/dev/null || true
-fi
-
-ok "Hostname configured: ${CUR_HOST} -> ${HOSTNAME_ARG}"
-ok "SCREEN_NUMBER=${SCREEN_NUMBER} (from argument)"
-
-
-
+# Apply runtime
+sudo hostnamectl set-hostname "$HOSTNAME_ARG" || true
+sudo hostname "$HOSTNAME_ARG" || true
 
 # ============================================================================
 # 3) Base OS config (root tasks)
