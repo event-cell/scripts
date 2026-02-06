@@ -214,7 +214,7 @@ sudo systemctl restart systemd-journald
 ok "journald configured"
 
 # ============================================================================
-# 7) Log2ram install (idempotent-ish)
+# Log2ram install
 # ============================================================================
 section "Log2ram install"
 
@@ -226,12 +226,28 @@ else
   log "Downloading log2ram into ${TMPDIR}..."
   wget -q https://github.com/azlux/log2ram/archive/master.tar.gz -O "${TMPDIR}/log2ram.tar.gz"
   tar -C "$TMPDIR" -xf "${TMPDIR}/log2ram.tar.gz"
-  log "Installing log2ram..."
-  sudo bash "${TMPDIR}/log2ram-master/install.sh"
+
+  log "Installing log2ram (running install.sh from its directory)..."
+  (
+    cd "${TMPDIR}/log2ram-master"
+    sudo bash ./install.sh
+  )
   ok "log2ram installed"
+
+  # Sanity checks + start
+  if [[ ! -f /etc/log2ram.conf ]]; then
+    warn "/etc/log2ram.conf missing after install; attempting to recover from repo default..."
+    sudo cp -a "${TMPDIR}/log2ram-master/log2ram.conf" /etc/log2ram.conf || true
+  fi
+
+  sudo systemctl daemon-reload || true
+  sudo systemctl enable log2ram.service >/dev/null 2>&1 || true
+  sudo systemctl restart log2ram.service || true
+
   rm -rf "$TMPDIR"
   ok "Cleaned up temp files"
 fi
+
 
 # ============================================================================
 # 8) Desktop autostart (pi)
