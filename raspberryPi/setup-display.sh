@@ -145,4 +145,17 @@ cat >"$tmp" <<EOF
 # Rotate output + keep DPMS on
 env KIOSK_ROTATE_ENABLE=${KIOSK_ROTATE_ENABLE} KIOSK_OUTPUT_NAME=${KIOSK_OUTPUT_NAME} KIOSK_OUTPUT_ROTATION=${KIOSK_OUTPUT_ROTATION} ${ROTATE_HELPER} &
 
-EO
+EOF
+
+if [[ "$KIOSK_ENABLE" == "1" ]]; then
+  echo "${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL} &" >>"$tmp"
+fi
+
+sudo mv "$tmp" "$AUTOSTART"
+sudo chown "${TARGET_USER}:${TARGET_USER}" "$AUTOSTART"
+sudo chmod 0644 "$AUTOSTART"
+
+log "Done."
+log "labwc autostart:  ${AUTOSTART}"
+log "display helper:   ${ROTATE_HELPER}"
+log "URL:              ${KIOSK_URL}"
