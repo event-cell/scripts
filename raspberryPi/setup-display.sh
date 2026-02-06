@@ -15,7 +15,7 @@ KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME:-}"             # optional
 KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}"  # 270 = left 90
 KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}"
 
-# NEW: output scale (2 = “2x DPI”)
+# output scale (2 = “2x DPI”)
 KIOSK_OUTPUT_SCALE="${KIOSK_OUTPUT_SCALE:-2}"
 
 TARGET_USER="${KIOSK_USER:-${SUDO_USER:-$(id -un)}}"
@@ -92,8 +92,16 @@ sudo tee "$ROTATE_HELPER" >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Give compositor time to come up
-sleep 2
+# Wait for Wayland socket (autostart can run before it exists)
+for i in {1..50}; do
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && -n "${WAYLAND_DISPLAY:-}" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+    break
+  fi
+  sleep 0.2
+done
+
+# Give compositor/outputs a moment to settle
+sleep 1
 
 ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
 OUT_NAME="${KIOSK_OUTPUT_NAME:-}"
@@ -102,14 +110,13 @@ SCALE="${KIOSK_OUTPUT_SCALE:-2}"
 
 if [[ "$ROTATE_ENABLE" == "1" ]]; then
   if [[ -z "$OUT_NAME" ]]; then
-    # Take first connected and strip card prefix:
     OUT_NAME="$(basename "$(dirname "$(grep -l '^connected$' /sys/class/drm/card*-*/status | head -n1)")")"
     OUT_NAME="${OUT_NAME#card*-}"
   fi
 
   case "$ROT" in 0|90|180|270) ;; *) ROT=270 ;; esac
 
-  # Apply transform + scale (scale=2 gives “2x DPI” effect)
+  # Apply transform + scale
   wlr-randr --output "$OUT_NAME" --transform "$ROT" >/dev/null 2>&1 || true
   wlr-randr --output "$OUT_NAME" --scale "$SCALE"    >/dev/null 2>&1 || true
 fi
@@ -121,6 +128,51 @@ while true; do
 done
 SH
 sudo chmod 0755 "$ROTATE_HELPER"
+
+# NEW: Wrapper that logs + waits for Wayland, then starts helper + Chromium
+KIOSK_STARTER="/usr/local/bin/labwc-kiosk-start.sh"
+sudo tee "$KIOSK_STARTER" >/dev/null <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOG_DIR="${HOME}/.cache"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/labwc-kiosk.log"
+
+exec >>"$LOG_FILE" 2>&1
+echo "==== $(date) labwc-kiosk-start ===="
+echo "USER=$(id -un) HOME=$HOME"
+echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-}"
+echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
+echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}"
+
+# Wait for Wayland socket
+for i in {1..50}; do
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && -n "${WAYLAND_DISPLAY:-}" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+    echo "Wayland socket ready: ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
+    break
+  fi
+  sleep 0.2
+done
+
+sleep 1
+
+/usr/local/bin/labwc-kiosk-display.sh &
+echo "Started display helper (PID $!)"
+
+CHROME_BIN="/usr/bin/chromium"
+[[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium-browser"
+
+PROFILE_DIR="${HOME}/.config/chromium-kiosk"
+URL="${KIOSK_URL:-http://timing.sdma/display/1}"
+
+COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
+--hide-crash-restore-bubble --check-for-update-interval=31536000 --password-store=basic"
+
+echo "Launching Chromium: $CHROME_BIN $URL"
+exec "$CHROME_BIN" $COMMON_FLAGS --user-data-dir="$PROFILE_DIR" "$URL"
+SH
+sudo chmod 0755 "$KIOSK_STARTER"
 
 # labwc autostart
 LABWC_DIR="${TARGET_HOME}/.config/labwc"
@@ -134,19 +186,20 @@ if [[ -f "$AUTOSTART" ]]; then
   log "Backup created: ${AUTOSTART}.bak_${ts}"
 fi
 
-# Write deterministic autostart:
+# Write deterministic autostart: call ONLY the wrapper (most reliable)
 tmp="$(mktemp)"
 cat >"$tmp" <<EOF
 # labwc autostart - generated
 
-# Rotate + scale + keep DPMS on
-env KIOSK_ROTATE_ENABLE=${KIOSK_ROTATE_ENABLE} KIOSK_OUTPUT_NAME=${KIOSK_OUTPUT_NAME} KIOSK_OUTPUT_ROTATION=${KIOSK_OUTPUT_ROTATION} KIOSK_OUTPUT_SCALE=${KIOSK_OUTPUT_SCALE} ${ROTATE_HELPER} &
+# Export kiosk variables for the starter/helper
+export KIOSK_URL="${KIOSK_URL}"
+export KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE}"
+export KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME}"
+export KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION}"
+export KIOSK_OUTPUT_SCALE="${KIOSK_OUTPUT_SCALE}"
 
+${KIOSK_STARTER} &
 EOF
-
-if [[ "$KIOSK_ENABLE" == "1" ]]; then
-  echo "${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL} &" >>"$tmp"
-fi
 
 sudo mv "$tmp" "$AUTOSTART"
 sudo chown "${TARGET_USER}:${TARGET_USER}" "$AUTOSTART"
@@ -155,4 +208,6 @@ sudo chmod 0644 "$AUTOSTART"
 log "Done."
 log "labwc autostart:  ${AUTOSTART}"
 log "display helper:   ${ROTATE_HELPER}"
+log "starter script:   ${KIOSK_STARTER}"
+log "log file:         ${TARGET_HOME}/.cache/labwc-kiosk.log"
 log "URL:              ${KIOSK_URL}"
