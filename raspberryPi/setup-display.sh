@@ -168,6 +168,7 @@ if [[ "$KIOSK_ROTATE_ENABLE" == "1" ]]; then
 # Wayfire/wlroots transform: 270 = rotate left 90 degrees
 transform = ${KIOSK_OUTPUT_ROTATION}
 
+
 EOF
   )
 fi
