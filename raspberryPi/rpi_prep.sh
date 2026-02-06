@@ -3,17 +3,10 @@ set -euo pipefail
 
 # ============================================================================
 # Raspberry Pi "golden image" prep script
-# - Mandatory argument: screen number (single digit 1..4)
-# - Sets hostname to screen01..screen04
+# - No script arguments (hostname is set via Raspberry Pi Imager)
 # - Friendly status output
 # - Installs a one-shot "uniquify" service for post-clone identity fixes
 #   (machine-id + SSH host keys)
-#
-# Usage:
-#   ./prep.sh <screen_number>
-# Example:
-#   ./prep.sh 1   -> hostname screen01
-#   ./prep.sh 4   -> hostname screen04
 # ============================================================================
 
 # ---------- pretty logging ----------
@@ -38,43 +31,6 @@ section(){ echo; echo "${C_BOLD}== $* ==${C_RESET}"; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Missing command: $1"; exit 1; }; }
 
-usage() {
-  cat <<EOF
-Usage: $(basename "$0") <screen_number>
-
-<screen_number> is mandatory and must be a single digit 1..4.
-It will be expanded to hostname screen01..screen04.
-
-Examples:
-  $(basename "$0") 1   # -> screen01
-  $(basename "$0") 2   # -> screen02
-  $(basename "$0") 3   # -> screen03
-  $(basename "$0") 4   # -> screen04
-EOF
-}
-
-validate_screen_number() {
-  local n="$1"
-  if [[ ! "$n" =~ ^[1-4]$ ]]; then
-    err "Invalid screen number: '$n' (must be 1..4)"
-    usage
-    exit 2
-  fi
-}
-
-# ---------- mandatory arg ----------
-SCREEN_NUMBER_ARG="${1:-}"
-if [[ -z "${SCREEN_NUMBER_ARG}" ]]; then
-  err "Screen number argument is required."
-  usage
-  exit 2
-fi
-validate_screen_number "${SCREEN_NUMBER_ARG}"
-
-SCREEN_NUMBER="${SCREEN_NUMBER_ARG}"
-
-HOSTNAME_ARG="$(printf 'screen%02d' "${SCREEN_NUMBER}")"
-
 # ---------- sanity checks ----------
 need_cmd sudo
 need_cmd grep
@@ -95,7 +51,6 @@ DEFAULT_TZ="Australia/Sydney"
 # Uniquify components
 UNIQ_SCRIPT="/usr/local/sbin/pi-uniquify-once.sh"
 UNIQ_SERVICE="/etc/systemd/system/pi-uniquify-once.service"
-HOSTNAME_MARKER="/etc/pi-hostname-set.done"
 
 # Display/kiosk setup (Wayland)
 DISPLAY_SETUP_URL="https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/setup-display.sh"
@@ -113,38 +68,8 @@ touch "$HOME/.ssh/authorized_keys"
 chmod 600 "$HOME/.ssh/authorized_keys"
 ok "~/.ssh and authorized_keys ready"
 
-# -----------------------------------------------------------------------------
-# Hostname: make it persist AND enforce on boot (prevents reversion to Screen99)
-# -----------------------------------------------------------------------------
-
 # ============================================================================
-# 2) Hostname (derived from screen number argument)
-# ============================================================================
-# Hostname: minimal + safe (no NetworkManager changes)
-SCREEN_NUMBER="${1:-}"
-if [[ ! "$SCREEN_NUMBER" =~ ^[1-4]$ ]]; then
-  echo "Usage: $0 <screen_number 1..4>" >&2
-  exit 2
-fi
-
-HOSTNAME_ARG="$(printf 'screen%02d' "$SCREEN_NUMBER")"
-
-# /etc/hostname
-echo "$HOSTNAME_ARG" | sudo tee /etc/hostname >/dev/null
-
-# /etc/hosts (prevents sudo resolve warnings)
-if sudo grep -qE '^\s*127\.0\.1\.1\s+' /etc/hosts; then
-  sudo sed -i -E "s|^\s*127\.0\.1\.1\s+.*$|127.0.1.1\t${HOSTNAME_ARG}|g" /etc/hosts
-else
-  echo -e "127.0.1.1\t${HOSTNAME_ARG}" | sudo tee -a /etc/hosts >/dev/null
-fi
-
-# Apply runtime
-sudo hostnamectl set-hostname "$HOSTNAME_ARG" || true
-sudo hostname "$HOSTNAME_ARG" || true
-
-# ============================================================================
-# 3) Base OS config (root tasks)
+# 2) System timezone & clock
 # ============================================================================
 section "System timezone & clock"
 
@@ -156,7 +81,7 @@ log "Current date/time:"
 date
 
 # ============================================================================
-# 4) APT mirror + cleanup + updates
+# 3) APT mirror + cleanup + updates
 # ============================================================================
 section "APT mirror, cleanup and updates"
 
@@ -185,36 +110,23 @@ else
 fi
 
 # ============================================================================
-# 5) Services and packages
+# 4) Services and packages
 # ============================================================================
 section "Services and packages"
 
 # -----------------------------------------------------------------------------
-# VNC (Wayland/Bookworm): replace RealVNC X11 service with WayVNC
-# - RealVNC's vncserver-x11-serviced does not work on Wayland.
-# - Use wayvnc (the supported VNC server for Wayland sessions on Raspberry Pi OS).
+# VNC (Wayland/Bookworm): use WayVNC (RealVNC X11 server doesn't work on Wayland)
 # -----------------------------------------------------------------------------
-
-# Remove the old RealVNC package if it was being installed (best-effort)
 sudo apt-get purge -y realvnc-vnc-server || true
-
-# Install WayVNC + a minimal RDP/VNC helper stack (Wayland)
 sudo apt-get update -y
 sudo apt-get install -y wayvnc
 
-# Disable the old X11 VNC service (best-effort) so it doesn't conflict / mislead
 sudo systemctl disable --now vncserver-x11-serviced.service 2>/dev/null || true
 sudo systemctl disable --now vncserver-x11.service 2>/dev/null || true
 sudo systemctl disable --now vncserver.service 2>/dev/null || true
 
-# Enable and start WayVNC (Wayland VNC server)
 sudo systemctl enable --now wayvnc.service
-
-# Quick sanity check
 sudo systemctl --no-pager --full status wayvnc.service || true
-
-# Optional: confirm it’s listening on TCP/5900
-# (will show LISTEN entries if active)
 sudo ss -ltnp | grep -E ':5900\b' || true
 
 log "Installing useful packages..."
@@ -227,7 +139,7 @@ sudo apt-get install -y \
 ok "Packages installed"
 
 # ============================================================================
-# 6) Journald size management
+# 5) Journald size management
 # ============================================================================
 section "Journald log size management"
 
@@ -254,7 +166,7 @@ sudo systemctl restart systemd-journald
 ok "journald configured"
 
 # ============================================================================
-# Log2ram install
+# 6) Log2ram install
 # ============================================================================
 section "Log2ram install"
 
@@ -288,7 +200,8 @@ else
 fi
 
 # ============================================================================
-# 8) Display / kiosk setup (Wayland)
+# 7) Display / kiosk setup (Wayland)
+#    NOTE: setup-display.sh should derive screen number from hostname (screen01..04).
 # ============================================================================
 section "Display / kiosk setup (Wayland)"
 
@@ -307,9 +220,8 @@ sudo wget -4 -q "$DISPLAY_SETUP_URL" -O "$DISPLAY_SETUP_LOCAL"
 sudo chmod 0755 "$DISPLAY_SETUP_LOCAL"
 ok "Downloaded: ${DISPLAY_SETUP_LOCAL}"
 
-log "Running display setup script with SCREEN_NUMBER=${SCREEN_NUMBER}..."
+log "Running display setup script (screen derived from hostname)..."
 sudo env \
-  SCREEN_NUMBER="${SCREEN_NUMBER}" \
   KIOSK_BASE_URL="http://timing.sdma" \
   KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-0}" \
   KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}" \
@@ -318,7 +230,7 @@ sudo env \
 ok "Display setup complete"
 
 # ============================================================================
-# 9) Make-clone-unique (recommended for imaging/cloning)
+# 8) Make-clone-unique (recommended for imaging/cloning)
 # ============================================================================
 section "Clone uniqueness (first-boot one-shot)"
 
@@ -382,10 +294,8 @@ ok "First-boot uniquify service enabled (will run once)"
 section "Complete"
 
 ok "Prep completed successfully."
-log "Screen number: ${SCREEN_NUMBER}"
-log "Hostname set to: ${HOSTNAME_ARG}"
+log "Hostname is managed by Raspberry Pi Imager."
 log "On first boot after cloning, the device will:"
 log "  - regenerate /etc/machine-id"
 log "  - regenerate SSH host keys"
 log "Logs: /var/log/pi-uniquify-once.log"
-warn "A reboot is required for the new hostname to be active system-wide."
