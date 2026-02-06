@@ -224,7 +224,7 @@ if command -v log2ram >/dev/null 2>&1 || systemctl list-unit-files | grep -q '^l
 else
   TMPDIR="$(mktemp -d)"
   log "Downloading log2ram into ${TMPDIR}..."
-  wget -q https://github.com/azlux/log2ram/archive/master.tar.gz -O "${TMPDIR}/log2ram.tar.gz"
+  wget -4 -q https://github.com/azlux/log2ram/archive/master.tar.gz -O "${TMPDIR}/log2ram.tar.gz"
   tar -C "$TMPDIR" -xf "${TMPDIR}/log2ram.tar.gz"
 
   log "Installing log2ram (running install.sh from its directory)..."
@@ -260,7 +260,7 @@ log "Ensuring autostart directory exists..."
 mkdir -p "$AUTOSTART_DIR"
 
 log "Fetching autostart file..."
-wget -q https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/LXDE-pi.autostart \
+wget -4 -q https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/LXDE-pi.autostart \
   --output-document="$AUTOSTART_FILE"
 ok "Autostart file updated: ${AUTOSTART_FILE}"
 
