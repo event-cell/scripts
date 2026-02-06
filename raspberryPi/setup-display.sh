@@ -18,6 +18,11 @@ KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}"
 # output scale (2 = “2x DPI”)
 KIOSK_OUTPUT_SCALE="${KIOSK_OUTPUT_SCALE:-2}"
 
+# NEW: extra waits (seconds)
+KIOSK_WAIT_WAYLAND_SOCKET="${KIOSK_WAIT_WAYLAND_SOCKET:-20}"   # max wait for Wayland socket
+KIOSK_WAIT_DISPLAY_READY="${KIOSK_WAIT_DISPLAY_READY:-6}"      # after socket before applying output
+KIOSK_WAIT_BEFORE_CHROME="${KIOSK_WAIT_BEFORE_CHROME:-8}"      # after display helper start before launching Chromium
+
 TARGET_USER="${KIOSK_USER:-${SUDO_USER:-$(id -un)}}"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]] || die "Could not resolve home for user: $TARGET_USER"
@@ -92,16 +97,27 @@ sudo tee "$ROTATE_HELPER" >/dev/null <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Tunables (seconds)
+WAIT_SOCKET="${KIOSK_WAIT_WAYLAND_SOCKET:-20}"
+WAIT_DISPLAY="${KIOSK_WAIT_DISPLAY_READY:-6}"
+
+echo "[display] starting: $(date)"
+echo "[display] WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}"
+echo "[display] waits: socket=${WAIT_SOCKET}s display=${WAIT_DISPLAY}s"
+
 # Wait for Wayland socket (autostart can run before it exists)
-for i in {1..50}; do
+# Check 10x per second.
+tries=$(( WAIT_SOCKET * 10 ))
+for ((i=1; i<=tries; i++)); do
   if [[ -n "${XDG_RUNTIME_DIR:-}" && -n "${WAYLAND_DISPLAY:-}" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
+    echo "[display] Wayland socket ready: ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
     break
   fi
-  sleep 0.2
+  sleep 0.1
 done
 
-# Give compositor/outputs a moment to settle
-sleep 1
+# Give compositor/outputs time to settle
+sleep "$WAIT_DISPLAY"
 
 ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
 OUT_NAME="${KIOSK_OUTPUT_NAME:-}"
@@ -116,9 +132,11 @@ if [[ "$ROTATE_ENABLE" == "1" ]]; then
 
   case "$ROT" in 0|90|180|270) ;; *) ROT=270 ;; esac
 
+  echo "[display] applying: output=${OUT_NAME} transform=${ROT} scale=${SCALE}"
+
   # Apply transform + scale
-  wlr-randr --output "$OUT_NAME" --transform "$ROT" >/dev/null 2>&1 || true
-  wlr-randr --output "$OUT_NAME" --scale "$SCALE"    >/dev/null 2>&1 || true
+  wlr-randr --output "$OUT_NAME" --transform "$ROT" >/dev/null 2>&1 || echo "[display] WARN: wlr-randr transform failed"
+  wlr-randr --output "$OUT_NAME" --scale "$SCALE"    >/dev/null 2>&1 || echo "[display] WARN: wlr-randr scale failed"
 fi
 
 # Keep DPMS on: if anything turns outputs off, force them back on
@@ -129,7 +147,7 @@ done
 SH
 sudo chmod 0755 "$ROTATE_HELPER"
 
-# NEW: Wrapper that logs + waits for Wayland, then starts helper + Chromium
+# Wrapper that logs + waits for Wayland, then starts helper + Chromium (with delay before chrome)
 KIOSK_STARTER="/usr/local/bin/labwc-kiosk-start.sh"
 sudo tee "$KIOSK_STARTER" >/dev/null <<'SH'
 #!/usr/bin/env bash
@@ -145,20 +163,28 @@ echo "USER=$(id -un) HOME=$HOME"
 echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-}"
 echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
 echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}"
+echo "KIOSK_URL=${KIOSK_URL:-}"
+
+WAIT_SOCKET="${KIOSK_WAIT_WAYLAND_SOCKET:-20}"
+WAIT_BEFORE_CHROME="${KIOSK_WAIT_BEFORE_CHROME:-8}"
+
+echo "waits: socket=${WAIT_SOCKET}s before_chrome=${WAIT_BEFORE_CHROME}s"
 
 # Wait for Wayland socket
-for i in {1..50}; do
+tries=$(( WAIT_SOCKET * 10 ))
+for ((i=1; i<=tries; i++)); do
   if [[ -n "${XDG_RUNTIME_DIR:-}" && -n "${WAYLAND_DISPLAY:-}" && -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]]; then
     echo "Wayland socket ready: ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
     break
   fi
-  sleep 0.2
+  sleep 1
 done
-
-sleep 1
 
 /usr/local/bin/labwc-kiosk-display.sh &
 echo "Started display helper (PID $!)"
+
+# Give the display helper time to rotate/scale before launching Chromium
+sleep "$WAIT_BEFORE_CHROME"
 
 CHROME_BIN="/usr/bin/chromium"
 [[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium-browser"
@@ -197,6 +223,11 @@ export KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE}"
 export KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME}"
 export KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION}"
 export KIOSK_OUTPUT_SCALE="${KIOSK_OUTPUT_SCALE}"
+
+# Wait tuning (seconds)
+export KIOSK_WAIT_WAYLAND_SOCKET="${KIOSK_WAIT_WAYLAND_SOCKET}"
+export KIOSK_WAIT_DISPLAY_READY="${KIOSK_WAIT_DISPLAY_READY}"
+export KIOSK_WAIT_BEFORE_CHROME="${KIOSK_WAIT_BEFORE_CHROME}"
 
 ${KIOSK_STARTER} &
 EOF
