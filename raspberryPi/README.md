@@ -12,12 +12,17 @@ Use the Raspberry Pi OS (32-bit) Desktop Image
 - Image
 - Boot whilst connected to a monitor (important to allow the desktop to setup correctly)
 
-Once booted SSH into the device and download the [installation script](https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh)
+# Raspberry Pi Prep Script
 
-```
-wget https://raw.githubusercontent.com/event-cell/scripts/main/raspberryPi/rpi_prep.sh
-chmod 755 rpi_prep.sh
-```
+This repository includes a Raspberry Pi preparation script that configures a base system and applies common settings.
+
+## Bootstrap (one-liner)
+
+Run this on the Raspberry Pi (as user `pi`) and provide a **mandatory hostname**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/event-cell/scripts/refs/heads/main/raspberryPi/rpi_prep.sh | bash -s -- <hostname>
+
 
 
 
