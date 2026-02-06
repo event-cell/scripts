@@ -1,83 +1,34 @@
 #!/usr/bin/env bash
-# configure_wayland_kiosk.sh
-#
-# Raspberry Pi OS (Bookworm) Wayland/Wayfire kiosk configurator:
-#   - Disables blanking / DPMS (Wayfire idle)
-#   - Rotates the primary connected output left 90 degrees (transform=270)
-#   - Autostarts ONE Chromium kiosk window per device, URL selected by SCREEN_NUMBER (1..4)
-#
-# ----------------------
-# Environment variables:
-# ----------------------
-# KIOSK_ENABLE=1|0                 (default 1)
-# KIOSK_BASE_URL                   (default "http://timing.sdma")
-#
-# SCREEN_NUMBER=1..4               (recommended) selects /display/<n>
-#   If not set, hostname is used:
-#     screen01 -> 1, screen02 -> 2, screen03 -> 3, screen04 -> 4
-#
-# Rotation options:
-# KIOSK_ROTATE_ENABLE=1|0           (default 1)
-# KIOSK_OUTPUT_NAME                 (optional; if empty and rotate enabled, auto-detect)
-# KIOSK_OUTPUT_ROTATION             (default 270) 0|90|180|270   (270 = left 90)
-# KIOSK_OUTPUT_PREFER=HDMI          (default HDMI) HDMI|DP|ANY
-#
 set -euo pipefail
 
 log() { printf "\n[%s] %s\n" "$(date +'%F %T')" "$*" >&2; }
 die() { printf "\nERROR: %s\n" "$*" >&2; exit 1; }
 
-require_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"; }
-
-# ---------- Defaults ----------
 KIOSK_ENABLE="${KIOSK_ENABLE:-1}"
 KIOSK_BASE_URL="${KIOSK_BASE_URL:-http://timing.sdma}"
 
 SCREEN_NUMBER="${SCREEN_NUMBER:-}"
 
-# For your new requirement: rotate left 90 by default
+# rotate left 90
 KIOSK_ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
-KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME:-}"
-KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}"   # 270 == rotate left 90
+KIOSK_OUTPUT_NAME="${KIOSK_OUTPUT_NAME:-}"        # optional
+KIOSK_OUTPUT_ROTATION="${KIOSK_OUTPUT_ROTATION:-270}"  # 270 = left 90
 KIOSK_OUTPUT_PREFER="${KIOSK_OUTPUT_PREFER:-HDMI}"
 
 TARGET_USER="${KIOSK_USER:-${SUDO_USER:-$(id -un)}}"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]] || die "Could not resolve home for user: $TARGET_USER"
 
-WAYFIRE_DIR="${TARGET_HOME}/.config"
-WAYFIRE_INI="${WAYFIRE_DIR}/wayfire.ini"
-
-backup_file() {
-  local f="$1"
-  [[ -f "$f" ]] || return 0
-  local ts
-  ts="$(date +%Y%m%d_%H%M%S)"
-  cp -a "$f" "${f}.bak_${ts}"
-  log "Backup created: ${f}.bak_${ts}"
-}
-
-# ---------- Hostname -> number (case-insensitive) ----------
 detect_screen_number() {
-  if [[ -n "${SCREEN_NUMBER}" ]]; then
-    echo "${SCREEN_NUMBER}"
-    return 0
-  fi
-
+  [[ -n "${SCREEN_NUMBER}" ]] && { echo "${SCREEN_NUMBER}"; return; }
   local hn hn_lc
   hn="$(hostname 2>/dev/null || true)"
   hn_lc="$(printf '%s' "$hn" | tr '[:upper:]' '[:lower:]')"
-
-  if [[ "$hn_lc" =~ ^screen0([1-4])$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return 0
-  fi
-
+  [[ "$hn_lc" =~ ^screen0([1-4])$ ]] && { echo "${BASH_REMATCH[1]}"; return; }
   die "SCREEN_NUMBER not set and hostname '$hn' is not one of screen01..screen04"
 }
 
-# ---------- Output auto-detect ----------
-detect_output_name() {
+detect_output_name_sysfs() {
   local prefer="${KIOSK_OUTPUT_PREFER^^}"
 
   mapfile -t connected < <(for st in /sys/class/drm/card*-*/status; do
@@ -111,91 +62,87 @@ detect_output_name() {
   echo "${conn[0]}"
 }
 
-# ---------- Main ----------
 log "Target user: ${TARGET_USER}"
 log "Target home: ${TARGET_HOME}"
 
-require_cmd awk
-require_cmd sed
-require_cmd getent
-
 SCREEN_NUMBER="$(detect_screen_number)"
-case "$SCREEN_NUMBER" in
-  1|2|3|4) ;;
-  *) die "SCREEN_NUMBER must be 1..4" ;;
-esac
+case "$SCREEN_NUMBER" in 1|2|3|4) ;; *) die "SCREEN_NUMBER must be 1..4" ;; esac
 
 KIOSK_URL="${KIOSK_BASE_URL}/display/${SCREEN_NUMBER}"
-log "Screen number: ${SCREEN_NUMBER}"
 log "Kiosk URL: ${KIOSK_URL}"
 
-log "Installing Chromium..."
+log "Installing required packages..."
 sudo apt-get update -y
-sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium || true
+sudo apt-get install -y chromium wlr-randr wlopm || true
 
-log "Configuring Wayfire..."
-
-mkdir -p "$WAYFIRE_DIR"
-backup_file "$WAYFIRE_INI"
-
-# Choose chromium binary robustly
-CHROME_BIN="/usr/bin/chromium-browser"
-if [[ ! -x "$CHROME_BIN" ]]; then
-  CHROME_BIN="/usr/bin/chromium"
-fi
-[[ -x "$CHROME_BIN" ]] || CHROME_BIN="chromium-browser"
-
+# Chromium binary
+CHROME_BIN="/usr/bin/chromium"
+[[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium-browser"
 PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
 COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000"
 
-# Rotation: auto-detect output unless explicitly specified
-ROTATE_SECTION=""
-if [[ "$KIOSK_ROTATE_ENABLE" == "1" ]]; then
-  OUT_NAME="${KIOSK_OUTPUT_NAME}"
+# Helper: rotate + keep DPMS on (labwc session)
+ROTATE_HELPER="/usr/local/bin/labwc-kiosk-display.sh"
+sudo tee "$ROTATE_HELPER" >/dev/null <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Give compositor time to come up
+sleep 2
+
+ROTATE_ENABLE="${KIOSK_ROTATE_ENABLE:-1}"
+OUT_NAME="${KIOSK_OUTPUT_NAME:-}"
+ROT="${KIOSK_OUTPUT_ROTATION:-270}"
+
+if [[ "$ROTATE_ENABLE" == "1" ]]; then
   if [[ -z "$OUT_NAME" ]]; then
-    OUT_NAME="$(detect_output_name)"
+    # Prefer sysfs-derived connector names (matches wlroots most of the time)
+    # If this fails, user should set KIOSK_OUTPUT_NAME explicitly.
+    for st in /sys/class/drm/card*-*/status; do
+      [[ -f "$st" ]] || continue
+      if grep -q '^connected$' "$st"; then
+        bn="$(basename "$(dirname "$st")")"
+        echo "Detected DRM node: $bn" >&2
+      fi
+    done
+    # Take first connected and strip card prefix:
+    OUT_NAME="$(basename "$(dirname "$(grep -l '^connected$' /sys/class/drm/card*-*/status | head -n1)")")"
+    OUT_NAME="${OUT_NAME#card*-}"
   fi
 
-  case "$KIOSK_OUTPUT_ROTATION" in
-    0|90|180|270) ;;
-    *) die "KIOSK_OUTPUT_ROTATION must be one of 0|90|180|270" ;;
-  esac
-
-  log "Rotation enabled. Output: ${OUT_NAME} transform=${KIOSK_OUTPUT_ROTATION}"
-  ROTATE_SECTION=$(
-    cat <<EOF
-[output:${OUT_NAME}]
-# Wayfire/wlroots transform: 270 = rotate left 90 degrees
-transform = ${KIOSK_OUTPUT_ROTATION}
-
-
-EOF
-  )
+  case "$ROT" in 0|90|180|270) ;; *) ROT=270 ;; esac
+  wlr-randr --output "$OUT_NAME" --transform "$ROT" >/dev/null 2>&1 || true
 fi
 
-# Write deterministic wayfire.ini (ordering matters; keep [core] first)
+# Keep DPMS on: if anything turns outputs off, force them back on
+# (Lightweight + robust for kiosks)
+while true; do
+  wlopm --on '*' >/dev/null 2>&1 || true
+  sleep 30
+done
+SH
+sudo chmod 0755 "$ROTATE_HELPER"
+
+# labwc autostart
+LABWC_DIR="${TARGET_HOME}/.config/labwc"
+AUTOSTART="${LABWC_DIR}/autostart"
+mkdir -p "$LABWC_DIR"
+
+# Back up once per run
+if [[ -f "$AUTOSTART" ]]; then
+  ts="$(date +%Y%m%d_%H%M%S)"
+  cp -a "$AUTOSTART" "${AUTOSTART}.bak_${ts}"
+  log "Backup created: ${AUTOSTART}.bak_${ts}"
+fi
+
+# Write deterministic autostart:
+# - starts DPMS keepalive + rotation helper
+# - starts chromium kiosk
 tmp="$(mktemp)"
 cat >"$tmp" <<EOF
-[core]
-plugins = autostart idle
+# labwc autostart - generated
 
-[idle]
-# Never blank / never DPMS-off
-dpms_timeout = -1
+# Rotate output + keep DPMS on
+env KIOSK_ROTATE_ENABLE=${KIOSK_ROTATE_ENABLE} KIOSK_OUTPUT_NAME=${KIOSK_OUTPUT_NAME} KIOSK_OUTPUT_ROTATION=${KIOSK_OUTPUT_ROTATION} ${ROTATE_HELPER} &
 
-${ROTATE_SECTION}[autostart]
-EOF
-
-# Kiosk autostart (ONE window)
-if [[ "$KIOSK_ENABLE" == "1" ]]; then
-  echo "kiosk = ${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL}" >>"$tmp"
-fi
-
-sudo mv "$tmp" "$WAYFIRE_INI"
-log "Fixing ownership of ${WAYFIRE_DIR} for ${TARGET_USER}..."
-sudo chown "${TARGET_USER}:${TARGET_USER}" "$WAYFIRE_INI"
-sudo chmod 0644 "$WAYFIRE_INI"
-
-log "Done."
-log "Wayfire config: ${WAYFIRE_INI}"
-log "URL:            ${KIOSK_URL}"
+EO
