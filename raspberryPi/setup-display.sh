@@ -79,7 +79,7 @@ for ((i=1; i<=tries; i++)); do
     echo "Wayland socket ready: ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
     break
   fi
-  sleep 0.1
+  sleep 1
 done
 
 sleep "$WAIT_DISPLAY"
@@ -144,8 +144,10 @@ for ((i=1; i<=tries; i++)); do
     echo "Wayland socket ready: ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
     break
   fi
-  sleep 0.1
+  sleep 1
 done
+
+sleep 2
 
 # Detach display helper from labwc/autostart (avoid SIGHUP / no-tty issues)
 setsid -f /usr/local/bin/labwc-kiosk-display.sh >>"$DISPLAY_LOG" 2>&1
