@@ -278,59 +278,42 @@ SH
 sudo chmod 0755 "$HIDE_CURSOR_SCRIPT"
 
 log "Configuring Wayfire..."
+
 mkdir -p "$WAYFIRE_DIR"
-touch "$WAYFIRE_INI"
 backup_file "$WAYFIRE_INI"
 
-# Ensure needed plugins are enabled
-ensure_wayfire_plugins "$WAYFIRE_INI"
-
-# Disable blanking / DPMS under Wayland (requires idle plugin)
-ini_set "$WAYFIRE_INI" "idle" "dpms_timeout" "-1"
-
-# Start cursor hider (requires autostart plugin)
-ini_set "$WAYFIRE_INI" "autostart" "cursor" "$HIDE_CURSOR_SCRIPT"
-
-# Rotation
-if [[ "$KIOSK_ROTATE_ENABLE" == "1" ]]; then
-  case "$KIOSK_OUTPUT_ROTATION" in
-    0|90|180|270) ;;
-    *) die "KIOSK_OUTPUT_ROTATION must be one of 0,90,180,270" ;;
-  esac
-
-  if [[ -z "$KIOSK_OUTPUT_NAME" ]]; then
-    KIOSK_OUTPUT_NAME="$(detect_output_name)"
-    log "Auto-detected output: ${KIOSK_OUTPUT_NAME} (prefer=${KIOSK_OUTPUT_PREFER})"
-  else
-    log "Using specified output: ${KIOSK_OUTPUT_NAME}"
-  fi
-
-  ini_set "$WAYFIRE_INI" "output:${KIOSK_OUTPUT_NAME}" "transform" "$KIOSK_OUTPUT_ROTATION"
-  log "Rotation enabled: output:${KIOSK_OUTPUT_NAME} transform=${KIOSK_OUTPUT_ROTATION}"
-else
-  log "Rotation not enabled (set KIOSK_ROTATE_ENABLE=1)."
+# Choose chromium binary robustly
+CHROME_BIN="/usr/bin/chromium-browser"
+if [[ ! -x "$CHROME_BIN" ]]; then
+  CHROME_BIN="/usr/bin/chromium"
 fi
+[[ -x "$CHROME_BIN" ]] || CHROME_BIN="chromium-browser"
+
+PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
+COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000"
+
+# Write a deterministic wayfire.ini (ordering matters; keep [core] first)
+tmp="$(mktemp)"
+cat >"$tmp" <<EOF
+[core]
+plugins = autostart idle
+
+[idle]
+dpms_timeout = -1
+
+[autostart]
+cursor = ${HIDE_CURSOR_SCRIPT}
+EOF
 
 # Kiosk autostart (ONE window)
-ini_autostart_remove_key "$WAYFIRE_INI" "kiosk"
-
 if [[ "$KIOSK_ENABLE" == "1" ]]; then
-  CHROME_BIN="/usr/bin/chromium-browser"
-  [[ -x "$CHROME_BIN" ]] || CHROME_BIN="/usr/bin/chromium" || true
-  [[ -x "$CHROME_BIN" ]] || CHROME_BIN="chromium-browser"
-
-  COMMON_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --hide-crash-restore-bubble --check-for-update-interval=31536000"
-  PROFILE_DIR="${TARGET_HOME}/.config/chromium-kiosk"
-
-  CMD="${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL}"
-  ini_set "$WAYFIRE_INI" "autostart" "kiosk" "$CMD"
-  log "Configured autostart kiosk command."
-else
-  log "KIOSK_ENABLE=0; kiosk autostart removed."
+  echo "kiosk = ${CHROME_BIN} ${COMMON_FLAGS} --user-data-dir=${PROFILE_DIR} ${KIOSK_URL}" >>"$tmp"
 fi
 
+sudo mv "$tmp" "$WAYFIRE_INI"
 log "Fixing ownership of ${WAYFIRE_DIR} for ${TARGET_USER}..."
-sudo chown -R "${TARGET_USER}:${TARGET_USER}" "$WAYFIRE_DIR"
+sudo chown "${TARGET_USER}:${TARGET_USER}" "$WAYFIRE_INI"
+sudo chmod 0644 "$WAYFIRE_INI"
 
 log "Done."
 log "Wayfire config: ${WAYFIRE_INI}"
